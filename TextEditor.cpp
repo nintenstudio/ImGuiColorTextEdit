@@ -228,6 +228,7 @@ namespace ImGuiColorTextEdit {
 
 	void TextEditor::DeleteRange(const Coordinates& aStart, const Coordinates& aEnd)
 	{
+
 		assert(aEnd >= aStart);
 		assert(!mReadOnly);
 
@@ -628,6 +629,7 @@ namespace ImGuiColorTextEdit {
 
 	void TextEditor::RemoveLines(int aStart, int aEnd)
 	{
+		std::unique_lock<std::shared_mutex> linesLock(mLinesMutex);
 		assert(!mReadOnly);
 		assert(aEnd >= aStart);
 		assert(mLines.size() > (size_t)(aEnd - aStart));
@@ -661,6 +663,7 @@ namespace ImGuiColorTextEdit {
 
 	void TextEditor::RemoveLine(int aIndex, const std::unordered_set<int>* aHandledCursors)
 	{
+		std::unique_lock<std::shared_mutex> linesLock(mLinesMutex);
 		assert(!mReadOnly);
 		assert(mLines.size() > 1);
 
@@ -771,6 +774,7 @@ namespace ImGuiColorTextEdit {
 
 	void TextEditor::RemoveGlyphsFromLine(int aLine, int aStartChar, int aEndChar)
 	{
+		std::unique_lock<std::shared_mutex> linesLock(mLinesMutex);
 		int column = GetCharacterColumn(aLine, aStartChar);
 		int deltaX = GetCharacterColumn(aLine, aEndChar) - column;
 		auto& line = mLines[aLine];
@@ -781,6 +785,7 @@ namespace ImGuiColorTextEdit {
 
 	void TextEditor::AddGlyphsToLine(int aLine, int aTargetIndex, Line::iterator aSourceStart, Line::iterator aSourceEnd)
 	{
+		std::unique_lock<std::shared_mutex> linesLock(mLinesMutex);
 		int targetColumn = GetCharacterColumn(aLine, aTargetIndex);
 		int charsInserted = std::distance(aSourceStart, aSourceEnd);
 		auto& line = mLines[aLine];
@@ -800,6 +805,7 @@ namespace ImGuiColorTextEdit {
 
 	TextEditor::Line& TextEditor::InsertLine(int aIndex)
 	{
+		std::unique_lock<std::shared_mutex> linesLock(mLinesMutex);
 		assert(!mReadOnly);
 
 		auto& result = *mLines.insert(mLines.begin() + aIndex, Line());
@@ -1518,6 +1524,7 @@ namespace ImGuiColorTextEdit {
 
 	void TextEditor::SetText(const std::string& aText)
 	{
+		std::unique_lock<std::shared_mutex> linesLock(mLinesMutex);
 		mLines.clear();
 		mLines.emplace_back(Line());
 		for (auto chr : aText)
@@ -1545,6 +1552,7 @@ namespace ImGuiColorTextEdit {
 
 	void TextEditor::SetTextLines(const std::vector<std::string>& aLines)
 	{
+		std::unique_lock<std::shared_mutex> linesLock(mLinesMutex);
 		mLines.clear();
 
 		if (aLines.empty())
@@ -2986,17 +2994,17 @@ namespace ImGuiColorTextEdit {
 
 	void TextEditor::ColorizeRange(int aFromLine, int aToLine)
 	{
-		if (mLines.empty() || aFromLine >= aToLine || mLanguageDefinition == nullptr)
+		if (mColorizeLines.empty() || aFromLine >= aToLine || mLanguageDefinition == nullptr)
 			return;
 
 		std::string buffer;
 		boost::cmatch results;
 		std::string id;
 
-		int endLine = std::max(0, std::min((int)mLines.size(), aToLine));
+		int endLine = std::max(0, std::min((int)mColorizeLines.size(), aToLine));
 		for (int i = aFromLine; i < endLine; ++i)
 		{
-			auto& line = mLines[i];
+			auto& line = mColorizeLines[i];
 
 			if (line.empty())
 				continue;
@@ -3092,12 +3100,16 @@ namespace ImGuiColorTextEdit {
 	void TextEditor::ColorizeInternal()
 	{
 		while (true) {
-			if (mLines.empty() || !mColorizerEnabled || mLanguageDefinition == nullptr)
+			mLinesMutex.lock_shared();
+			mColorizeLines = mLines;
+			mLinesMutex.unlock_shared();
+
+			if (mColorizeLines.empty() || !mColorizerEnabled || mLanguageDefinition == nullptr)
 				continue;
 
 			if (mCheckComments)
 			{
-				auto endLine = mLines.size();
+				auto endLine = mColorizeLines.size();
 				auto endIndex = 0;
 				auto commentStartLine = endLine;
 				auto commentStartIndex = endIndex;
@@ -3110,7 +3122,7 @@ namespace ImGuiColorTextEdit {
 				auto currentIndex = 0;
 				while (currentLine < endLine || currentIndex < endIndex)
 				{
-					auto& line = mLines[currentLine];
+					auto& line = mColorizeLines[currentLine];
 
 					if (currentIndex == 0 && !concatenate)
 					{
@@ -3230,7 +3242,22 @@ namespace ImGuiColorTextEdit {
 					mColorRangeMin = std::numeric_limits<int>::max();
 					mColorRangeMax = 0;
 				}
-				continue;
+
+				mLinesMutex.lock();
+				if (mLines.size() > mColorizeLines.size())
+					mColorizeLines.resize(mLines.size());
+				for (int l = 0; l < mLines.size(); l++) {
+					int cols = mLines.at(l).size();
+					if (cols > mColorizeLines.at(l).size())
+						mColorizeLines.at(l).resize(cols);
+					for (int c = 0; c < cols; c++) {
+						mLines.at(l).at(c).mColorIndex = mColorizeLines.at(l).at(c).mColorIndex;
+						mLines.at(l).at(c).mComment = mColorizeLines.at(l).at(c).mComment;
+						mLines.at(l).at(c).mMultiLineComment = mColorizeLines.at(l).at(c).mMultiLineComment;
+						mLines.at(l).at(c).mPreprocessor = mColorizeLines.at(l).at(c).mPreprocessor;
+					}
+				}
+				mLinesMutex.unlock();
 			}
 		}
 	}

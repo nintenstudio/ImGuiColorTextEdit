@@ -11,6 +11,7 @@
 #include <map>
 #include <boost/regex.hpp>
 #include <future>
+#include <shared_mutex>
 #include "imgui.h"
 
 namespace ImGuiColorTextEdit {
@@ -158,6 +159,7 @@ namespace ImGuiColorTextEdit {
 
 			Glyph(Char aChar, PaletteIndex aColorIndex) : mChar(aChar), mColorIndex(aColorIndex),
 				mComment(false), mMultiLineComment(false), mPreprocessor(false) {}
+			Glyph() : mChar('\0'), mComment(false), mMultiLineComment(false), mPreprocessor(false) {}
 		};
 
 		typedef std::vector<Glyph> Line;
@@ -468,6 +470,8 @@ namespace ImGuiColorTextEdit {
 
 		float mLineSpacing;
 		Lines mLines;
+		std::shared_mutex mLinesMutex;
+		Lines mColorizeLines; // Copy of mLines that is used by the colorize thread. Used to avoid excessive blocking.
 		EditorState mState;
 		UndoBuffer mUndoBuffer;
 		int mUndoIndex;
